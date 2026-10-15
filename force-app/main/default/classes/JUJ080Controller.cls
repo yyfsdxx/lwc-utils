@@ -60,8 +60,12 @@ public with sharing class JUJ080Controller {
     private static final List<String> E_NO_JISSHIBI = new List<String>{ 'JUJ080-E002', '実施日が登録されていません。' };
     @TestVisible
     private static final List<String> E_BULK_ASSIGNING = new List<String>{ 'WLP007-0005', '一括割当実行中のため処理できません。' };
+    // 追加モードで登録済みの従事者を登録しようとした場合（応募情報表示ボタンの押下を促す）
     @TestVisible
-    private static final List<String> E_ALREADY_EXISTS = new List<String>{ 'JUJ080-E003', 'この従事者の応募は既に登録されています。' };
+    private static final List<String> E_ALREADY_EXISTS = new List<String>{
+        'JUJ080-E003',
+        'この従事者の応募情報は既に登録されています。応募情報表示ボタンで登録内容を表示してください。'
+    };
     @TestVisible
     private static final List<String> E_DELETED = new List<String>{ 'JUJ080-E004', '他のユーザにより削除されています。' };
     @TestVisible

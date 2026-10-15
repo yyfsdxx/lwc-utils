@@ -196,7 +196,14 @@ const getApplication = async () => ({
     application: STUB_APPLICATION
 });
 const checkKanoubiInput = async () => {};
-const saveApplication = async () => ({ uketukeNo: 4 });
+const saveApplication = async ({ requestJson }) => {
+    const req = JSON.parse(requestJson);
+    if (!req.applicationId && req.jujishaNo === '1111111') {
+        // 追加モードで登録済みの従事者を登録した場合（サーバ側 7.(3)③a のエラー）
+        throw { body: { message: 'この従事者の応募情報は既に登録されています。応募情報表示ボタンで登録内容を表示してください。' } };
+    }
+    return { uketukeNo: 4 };
+};
 const deleteApplication = async () => {};
 const deleteAllApplications = async () => {};
 // ========== スタブ ここまで ==========
@@ -291,9 +298,10 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
         this.clearMessages();
         // (1) 事業の取得
         await this.loadJigyo();
-        // (2) 3項目のいずれかが変わった場合、追加モードとし、登録番号・従事者情報部・応募情報部を初期化する
+        // (2) 3項目のいずれかが変わった場合、追加モードとし、応募情報部（受付番号・従事可能日を含む）を初期化する
+        //     登録番号/相談員番号・従事者情報部は保持する
         if (!this.isSameJigyoKey(this.jigyoKey, this.prevJigyoKey)) {
-            this.resetJujishaAndApplication();
+            this.resetApplicationForm();
         }
         this.prevJigyoKey = { ...this.jigyoKey };
     }
@@ -343,7 +351,8 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
         this.clearMessages();
         // (1) 従事者の取得
         await this.loadJujisha();
-        // (2) ① 応募情報部の入力内容は保持し、従事可能日のみ未指定とする ② 追加モードとする
+        // (2) ① 応募情報部の入力内容は保持し、受付番号・従事可能日のみ初期化する ② 追加モードとする
+        // ※ 登録済みの応募がある従事者かどうかは登録時にサーバ側でチェックする（7.(3)③a）
         this.kanoubiDates = [];
         this.uketukeNo = null;
         this.toAddMode();
