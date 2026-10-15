@@ -295,7 +295,6 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
     }
 
     async onJigyoKeyChanged() {
-        this.clearMessages();
         // (1) 事業の取得
         await this.loadJigyo();
         // (2) 3項目のいずれかが変わった場合、追加モードとし、応募情報部（受付番号・従事可能日を含む）を初期化する
@@ -358,7 +357,6 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
             return;
         }
         this.prevJujishaNo = this.jujishaNo;
-        this.clearMessages();
         // (1) 従事者の取得
         await this.loadJujisha();
         // (2) ① 応募情報部の入力内容は保持し、受付番号・従事可能日のみ初期化する ② 追加モードとする
@@ -776,7 +774,8 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
         this.showErrorMessage(error?.body?.message || '予期しないエラーが発生しました。');
     }
 
-    // 画面頭部のエラーメッセージを消去する（各操作の開始時に呼び出す）
+    // 画面頭部のエラーメッセージを消去する（各ボタン押下時の開始時に呼び出す）
+    // ※ フォーカスアウト（従事事業キー・登録番号/相談員番号の変更）ではチェックを行わないため、消去しない
     clearMessages() {
         this.headerMessages = [];
     }
