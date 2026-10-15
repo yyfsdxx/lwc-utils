@@ -309,9 +309,17 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
     // 2.(1) 事業の取得
     async loadJigyo() {
         const { jujiJigyoNo, jujiBasyoNo, jisiNendo } = this.jigyoKey;
-        this.basyoName = '';
-        this.jigyo = {};
-        this.lastUketukeNo = null;
+        // 従事場所No が変わっていない場合、従事場所名は再設定しない（表示のちらつき防止）
+        const isBasyoChanged = jujiBasyoNo !== this.prevJigyoKey.jujiBasyoNo;
+        if (isBasyoChanged) {
+            this.basyoName = '';
+        }
+        // 従事事業キーが変わっていない場合（フォーカスアウトのみ）は、取得結果が返るまで現在の表示を保持する（表示のちらつき防止）
+        // 変わった場合は、取得中に旧事業の設定で入力・登録できないよう、先に空白とする
+        if (!this.isSameJigyoKey(this.jigyoKey, this.prevJigyoKey)) {
+            this.jigyo = {};
+            this.lastUketukeNo = null;
+        }
         // ① 従事場所No 入力時は従事場所名を取得、② 3項目すべて入力時は事業を取得。いずれも該当しない場合は呼び出さない
         if (!jujiBasyoNo && !(jujiJigyoNo && jisiNendo)) {
             return;
@@ -319,7 +327,9 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
         try {
             // 戻り値：{ basyoName, jigyo: { jigyoName, shibuCode, shibuName, lastUketukeNo, inputControl } | null }
             const result = await getJigyo({ ...this.jigyoKey });
-            this.basyoName = result.basyoName || '';
+            if (isBasyoChanged) {
+                this.basyoName = result.basyoName || '';
+            }
             this.jigyo = result.jigyo || {};
             this.lastUketukeNo = result.jigyo ? result.jigyo.lastUketukeNo : null;
         } catch (error) {
