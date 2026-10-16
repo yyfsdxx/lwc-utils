@@ -126,6 +126,11 @@ export default class Juj082 extends LightningElement {
 
     // ========== 初期表示 ==========
     connectedCallback() {
+        this.initKey();
+    }
+
+    // 従事事業キー部を初期表示の状態にする（初期表示・クリアで使用）
+    initKey() {
         // 呼出し元の従事事業キー・取得済みの事業情報を表示する
         this.key = { ...emptyKey(), ...(this.jigyoKey || {}) };
         this.prevKey = { ...this.key };
@@ -306,8 +311,11 @@ export default class Juj082 extends LightningElement {
     }
 
     // ========== クリア・閉じる ==========
-    // 検索条件・検索結果を初期化する（従事事業キー部は保持する）
+    // 画面を初期表示の状態に戻す
+    // ※ 従事事業キー部は呼出し元から引き継いだ値に戻す（従事事業基本情報から遷移した場合は入力不可のため変わらない。
+    //   従事事業メニューから遷移した場合は入力した値を破棄し、実施年度が空白なら汎用マスタの対象年度を設定する）
     handleClearSearch() {
+        this.initKey();
         this.condition = emptyCondition();
         this.names = emptyNames();
         this.searchData = [];
