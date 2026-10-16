@@ -33,6 +33,7 @@ const MSG = {
 // 行の区分（CSS クラス）
 const ROW_WARIATE = 'row-status-waritate'; // 割当
 const ROW_BOSHU = 'row-status-oubo'; // 募集
+const CHILD_ROW = 'child-row'; // 時間帯行（統一のスタイル）
 const YOUBI_SATURDAY = 'youbi-saturday';
 const YOUBI_SUNDAY = 'youbi-sunday'; // 日曜・祝日
 const CELL_CLIP = 'cell-clip';
@@ -244,7 +245,8 @@ export default class Juj081 extends LightningElement {
         this.setDaySelection(date, [...current]);
     }
 
-    // 全選択（一覧ヘッダー）：表示期間内の日付行に対して日付行と同じ処理を行う（設計書外。要否は要確認）
+    // 全選択（一覧ヘッダー）：ON で表示期間内の選択可能な時間帯をすべて追加、OFF ですべて削除（本人割当済を除く）
+    // ※ 表示月チェックオフボタンは本チェックボックスと重複するため廃止（2026/10/16）
     handleMasterCheck(event) {
         const checked = event.target.checked;
         const selection = { ...this.selection };
@@ -257,17 +259,6 @@ export default class Juj081 extends LightningElement {
     // 全チェックオフ：保持中の従事可能日をすべて削除する（本人割当済を除く）
     handleAllCheckOff() {
         this.selection = JSON.parse(JSON.stringify(this.ownAssigned));
-    }
-
-    // 表示月チェックオフ：表示期間内の日付を削除する（本人割当済を除く）
-    handleDisplayMonthCheckOff() {
-        const selection = { ...this.selection };
-        Object.keys(selection)
-            .filter((date) => date >= this.periodFrom && date <= this.periodTo)
-            .forEach((date) => {
-                selection[date] = this.withOwn(date, []);
-            });
-        this.selection = selection;
     }
 
     // クリア：保持中の従事可能日を初期値に戻す
@@ -386,8 +377,8 @@ export default class Juj081 extends LightningElement {
                 endTime: slot.endTime,
                 boshuNinzu: slot.count,
                 wariateNinzu: slot.wariateNinzu,
-                // 4.(2)① 時間帯行の区分
-                rowClass: `child-row ${slot.wariateNinzu > 0 ? ROW_WARIATE : ROW_BOSHU}`,
+                // 4.(2)① 時間帯行は区分による色付けをせず、統一のスタイルとする（従事事業実施日登録と同様）
+                rowClass: CHILD_ROW,
                 isSelected: selected.has(key),
                 // ④ 本人割当済の時間帯は選択不可
                 isDisabled: own.has(key)
