@@ -24,12 +24,10 @@ import { getObjectInfos } from 'lightning/uiObjectInfoApi';
 // import deleteApplication from '@salesforce/apex/JUJ080Controller.deleteApplication';
 // import deleteAllApplications from '@salesforce/apex/JUJ080Controller.deleteAllApplications';
 
-// 【要確認】子画面（JUJ081・082・110・120・140）の呼出し方式。LightningModal の場合はここで import して登録する。
-// ※ JUJ082 は LightningModal として実装済み。html 作成・デプロイ後に以下のコメントを外す。
-// import Juj082 from 'c/juj082';
-const SUB_SCREENS = {
-    // JUJ082: Juj082
-};
+// 【要確認】子画面（JUJ110・120・140）の呼出し方式。
+// ※ 子画面は共通に合わせて子コンポーネントとして html に配置する（JUJ081・JUJ082 は配置済み）。
+//   未接続の子画面はここに登録がないため「未接続」と表示する。
+const SUB_SCREENS = {};
 
 // 遷移元
 const FROM_JIGYO_INFO = 'JIGYO_INFO'; // 従事事業基本情報
@@ -156,7 +154,10 @@ const STUB_APPLICATION = {
         weekdays: ['月', '水'],
         skills: [{ field: 'スキル_所得税__c', value: '5' }]
     },
-    kanoubiDates: ['2026-11-01', '2026-11-08']
+    kanoubiDates: [
+        { kanoubiDate: '2026-11-03', timeSlots: [{ startTime: '13:00', endTime: '15:00' }] },
+        { kanoubiDate: '2026-12-01', timeSlots: [{ startTime: '10:00', endTime: '12:00' }] }
+    ]
 };
 const getJigyo = async ({ jujiJigyoNo, jujiBasyoNo, jisiNendo }) => {
     const found = jujiJigyoNo && jujiBasyoNo && jisiNendo && jujiJigyoNo !== '9999999';
@@ -228,8 +229,10 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
     applicationId = null; // null＝追加モード
     lastModifiedDate = null;
     form = emptyForm();
-    kanoubiDates = []; // 保持中の従事可能日
+    kanoubiDates = []; // 保持中の従事可能日 [{ kanoubiDate: 'yyyy-MM-dd', timeSlots: [{ startTime, endTime }] }]
 
+    isApplicationSearchOpen = false; // 応募情報検索（JUJ082）の表示有無
+    isKanoubiOpen = false; // 従事可能日指定（JUJ081）の表示有無
     isDirty = false; // 未登録の変更有無
     isLoading = false;
     headerMessages = []; // 画面頭部に表示するエラーメッセージ
@@ -412,21 +415,24 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
         }
     }
 
-    // ========== 5. 応募情報検索からの戻り時 ==========
-    async handleApplicationSearchClick() {
+    // ========== 応募情報検索ボタン押下時：応募情報検索（JUJ082）を表示する ==========
+    handleApplicationSearchClick() {
         this.clearMessages();
-        // 従事事業名・従事場所名は JUJ082 の結果一覧に画面の値として表示する
-        const result = await this.openSubScreen('JUJ082', {
-            jigyoKey: this.jigyoKey,
-            jigyoName: this.jigyo.jigyoName,
-            basyoName: this.basyoName
-        });
-        if (!result) {
-            return;
-        }
+        this.isApplicationSearchOpen = true;
+    }
+
+    // 応募情報検索の閉じる
+    handleApplicationSearchClose() {
+        this.isApplicationSearchOpen = false;
+    }
+
+    // ========== 5. 応募情報検索からの戻り時（応募行の選択） ==========
+    async handleApplicationSearchSelect(event) {
+        this.isApplicationSearchOpen = false;
+        const { applicationId } = event.detail;
         try {
             // 戻り値：{ jigyoKey, jujishaNo, jujisha, application }
-            const res = await getApplication({ applicationId: result.applicationId });
+            const res = await getApplication({ applicationId });
             // ① 従事事業メニューから遷移した場合、選択された応募の従事事業キーを設定し、事業の取得を行う
             if (this.fromScreen === FROM_MENU) {
                 this.jigyoKey = { ...res.jigyoKey };
@@ -457,17 +463,23 @@ export default class Juj080 extends NavigationMixin(LightningElement) {
             this.showError(error);
             return;
         }
-        // (2) ① 従事可能日指定（JUJ081）を表示する
-        const result = await this.openSubScreen('JUJ081', {
-            jigyoKey: this.jigyoKey,
-            jujishaNo: this.jujishaNo,
-            jujishaName: this.jujisha.name,
-            kanoubiDates: this.kanoubiDates
-        });
-        // ② a. 保存：保持内容を置き換える b. 閉じる：何もしない ③ DB は更新しない
-        if (result) {
-            this.kanoubiDates = result.kanoubiDates;
-            this.isDirty = true;
+        // (2) ① 従事可能日指定（JUJ081）を表示する（従事事業キー・番号・保持中の従事可能日を html で引き渡す）
+        this.isKanoubiOpen = true;
+    }
+
+    // (2) ② a. 保存：戻り値の従事可能日で保持内容を置き換える ③ DB は更新しない
+    handleKanoubiSave(event) {
+        this.isKanoubiOpen = false;
+        this.kanoubiDates = event.detail.kanoubiDates;
+        this.isDirty = true;
+    }
+
+    // (2) ② b. 閉じる：何もしない（JUJ081 の初期表示エラーで閉じた場合はメッセージを表示する）
+    handleKanoubiClose(event) {
+        this.isKanoubiOpen = false;
+        const errorMessage = event.detail?.errorMessage;
+        if (errorMessage) {
+            this.showErrorMessage(errorMessage);
         }
     }
 

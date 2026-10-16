@@ -6,21 +6,105 @@
  * ※ 従事事業応募は従事事業の主従子オブジェクトのため、参照範囲は従事事業に従う。
  *   SOQL はすべてユーザモードで実行し、支部の条件は付けない。
  * ※ LWC から呼び出すメソッドは内部クラスを引数・戻り値に使用できないため、
- *   引数は JSON 文字列、戻り値は List<Map<String, Object>> とする。
+ *   引数は基本型または JSON 文字列、戻り値は基本型または Map／List<Map> とする。
  */
 public with sharing class JUJ082Controller {
 
     // ==================== 定数 ====================
-    private static final String TYPE_MEMBER = 'MEMBER'; // 会員
-    private static final String TYPE_SODANIN = 'SODANIN'; // 相談員
+    // 名称取得の種別（getName の nameType）
+    @TestVisible
+    private static final String NAME_TOROKU = 'TOROKU'; // 登録番号 → 会員氏名
+    @TestVisible
+    private static final String NAME_SHIBU = 'SHIBU'; // 支部コード → 支部名
+    @TestVisible
+    private static final String NAME_SODANIN = 'SODANIN'; // 相談員番号 → 相談員氏名
 
     // 【要確認】会員の氏名（検索用）：「氏名(姓) + 半角スペース + 氏名(名)」の項目（数式項目を想定）
     @TestVisible
     private static final String MEMBER_NAME_FIELD = '会員__r.氏名_検索用__c';
 
+    // 登録日時の表示形式（ユーザのタイムゾーンで表示）
+    private static final String DATETIME_FORMAT = 'yyyy/MM/dd HH:mm:ss';
+
     // 【要確認 QA-20】メッセージ（{メッセージID, 文言}）
     @TestVisible
     private static final List<String> E_RANGE = new List<String>{ 'SYSTEM-5104', '範囲指定が正しくありません。' };
+
+    // ==================== 初期表示：実施年度の初期値 ====================
+    // 戻り値：汎用マスタの対象年度（取得できない場合は null）
+    @AuraEnabled
+    public static String getDefaultNendo() {
+        // 【要確認】汎用マスタの抽出条件（対象年度を保持するレコードの特定方法）
+        List<Hanyou_Master__c> recs = [
+            SELECT 対象年度__c
+            FROM Hanyou_Master__c
+            WHERE 対象年度__c != null
+            WITH USER_MODE
+            LIMIT 1
+        ];
+        return recs.isEmpty() ? null : recs[0].対象年度__c;
+    }
+
+    // ==================== 従事事業キー変更時：事業の取得 ====================
+    // 戻り値：{ basyoName, jigyo: { jigyoName, shibuCode, shibuName } | null }
+    @AuraEnabled
+    public static Map<String, Object> getJigyo(String jujiJigyoNo, String jujiBasyoNo, String jisiNendo) {
+        JigyoResult result = new JigyoResult();
+        // 従事場所No が入力されている場合、従事場所名を取得する
+        if (String.isNotBlank(jujiBasyoNo)) {
+            List<従事場所マスタ__c> basyos = [
+                SELECT 従事場所名__c
+                FROM 従事場所マスタ__c
+                WHERE 従事場所No__c = :jujiBasyoNo
+                WITH USER_MODE
+                LIMIT 1
+            ];
+            result.basyoName = basyos.isEmpty() ? null : basyos[0].従事場所名__c;
+        }
+        // 3項目すべて入力されている場合、従事事業を取得する
+        従事事業__c jigyo = selectJigyo(jujiJigyoNo, jujiBasyoNo, jisiNendo);
+        if (jigyo != null) {
+            JigyoInfo info = new JigyoInfo();
+            info.jigyoName = jigyo.従事事業名__c;
+            info.shibuCode = jigyo.支部__r?.支部コード__c;
+            info.shibuName = jigyo.支部__r?.Name;
+            result.jigyo = info;
+        }
+        return toMap(result);
+    }
+
+    // ==================== 番号変更時：名称の取得 ====================
+    // 引数：nameType（TOROKU／SHIBU／SODANIN）、code（入力された番号）
+    // 戻り値：名称（未入力・取得できない場合は null。エラーとしない）
+    @AuraEnabled
+    public static String getName(String nameType, String code) {
+        if (String.isBlank(code)) {
+            return null;
+        }
+        if (nameType == NAME_TOROKU) {
+            List<Contact> recs = [
+                SELECT Name FROM Contact WHERE 登録番号__c = :code WITH USER_MODE LIMIT 1
+            ];
+            return recs.isEmpty() ? null : recs[0].Name;
+        }
+        if (nameType == NAME_SHIBU) {
+            // 支部名は事務所・法人の名称（Name）とする（1つの支部コードに対応する支部は1件の想定。念のため先頭1件とする）
+            List<Account> recs = [
+                SELECT Name FROM Account
+                WHERE 支部コード__c = :code
+                WITH USER_MODE
+                LIMIT 1
+            ];
+            return recs.isEmpty() ? null : recs[0].Name;
+        }
+        if (nameType == NAME_SODANIN) {
+            List<相談員__c> recs = [
+                SELECT 氏名__c FROM 相談員__c WHERE 相談員番号__c = :code WITH USER_MODE LIMIT 1
+            ];
+            return recs.isEmpty() ? null : recs[0].氏名__c;
+        }
+        return null;
+    }
 
     // ==================== 1. 検索ボタン押下時 ====================
     // 引数：SearchCondition の JSON 文字列
@@ -34,13 +118,13 @@ public with sharing class JUJ082Controller {
             validateRanges(cond);
 
             // (2) 従事事業の取得。取得できない場合は 0件（エラーとしない）
-            Id jigyoId = selectJigyoId(cond.jujiJigyoNo, cond.jujiBasyoNo, cond.jisiNendo);
-            if (jigyoId == null) {
+            従事事業__c jigyo = selectJigyo(cond.jujiJigyoNo, cond.jujiBasyoNo, cond.jisiNendo);
+            if (jigyo == null) {
                 return new List<Map<String, Object>>();
             }
 
             // (3)〜(7) 抽出・ソート
-            List<従事事業応募__c> apps = selectApplications(jigyoId, cond);
+            List<従事事業応募__c> apps = selectApplications(jigyo.Id, cond);
             List<Map<String, Object>> rows = new List<Map<String, Object>>();
             for (従事事業応募__c app : apps) {
                 rows.add(toMap(toRow(app)));
@@ -72,13 +156,13 @@ public with sharing class JUJ082Controller {
     }
 
     // ==================== Selector ====================
-    // (2) 従事事業（3項目のいずれかが未入力の場合はクエリを発行しない）
-    private static Id selectJigyoId(String jigyoNo, String basyoNo, String nendo) {
+    // 従事事業（3項目のいずれかが未入力の場合はクエリを発行しない）
+    private static 従事事業__c selectJigyo(String jigyoNo, String basyoNo, String nendo) {
         if (String.isBlank(jigyoNo) || String.isBlank(basyoNo) || String.isBlank(nendo)) {
             return null;
         }
         List<従事事業__c> recs = [
-            SELECT Id
+            SELECT Id, 従事事業名__c, 支部__r.支部コード__c, 支部__r.Name
             FROM 従事事業__c
             WHERE 従事事業No__c = :jigyoNo
             AND 従事場所__r.従事場所No__c = :basyoNo
@@ -86,7 +170,7 @@ public with sharing class JUJ082Controller {
             WITH USER_MODE
             LIMIT 1
         ];
-        return recs.isEmpty() ? null : recs[0].Id;
+        return recs.isEmpty() ? null : recs[0];
     }
 
     // (3)〜(7) 従事事業応募の抽出
@@ -144,12 +228,11 @@ public with sharing class JUJ082Controller {
 
         // (5) 取得項目・(6) ソート順・(7) 取得件数（上限なし）
         String soql =
-            'SELECT Id, 受付番号__c, 会員__c, 会員__r.登録番号__c, 会員__r.Name,' +
-            ' 会員__r.事務所__r.支部コード__c, 会員__r.事務所__r.支部名__c,' +
+            'SELECT Id, 受付番号__c, CreatedDate, 会員__c, 会員__r.登録番号__c, 会員__r.Name,' +
             ' 相談員__c, 相談員__r.相談員番号__c, 相談員__r.氏名__c' +
             ' FROM 従事事業応募__c' +
             ' WHERE ' + String.join(wheres, ' AND ') +
-            // 【要確認】ソート順一覧（未提供）。暫定：受付番号の昇順
+            // 【要確認】ソート順一覧（未提供）。暫定：受付番号の昇順（画面で列ごとに並替え可）
             ' ORDER BY 受付番号__c ASC NULLS LAST, Id ASC';
         return Database.queryWithBinds(soql, binds, AccessLevel.USER_MODE);
     }
@@ -179,21 +262,18 @@ public with sharing class JUJ082Controller {
     }
 
     // ==================== 変換 ====================
-    // 【要確認】検索結果項目一覧（未提供）。暫定の取得項目
+    // (5) 取得項目：受付番号・登録番号・相談員番号・氏名・登録日時
+    // ※ 従事事業No・従事事業名・従事場所No・従事場所名・実施年度は画面の値を設定する（現行同様）
     private static SearchRow toRow(従事事業応募__c app) {
         SearchRow row = new SearchRow();
         row.applicationId = app.Id;
         row.uketukeNo = app.受付番号__c;
+        row.createdDate = app.CreatedDate?.format(DATETIME_FORMAT);
         if (app.会員__c != null) {
-            row.jujishaType = TYPE_MEMBER;
-            row.jujishaNo = app.会員__r.登録番号__c;
+            row.torokuNo = app.会員__r.登録番号__c;
             row.name = app.会員__r.Name;
-            row.shibuCode = app.会員__r.事務所__r?.支部コード__c;
-            row.shibuName = app.会員__r.事務所__r?.支部名__c;
         } else {
-            // 相談員の場合、支部コード・支部名は空白
-            row.jujishaType = TYPE_SODANIN;
-            row.jujishaNo = app.相談員__r?.相談員番号__c;
+            row.sodaninNo = app.相談員__r?.相談員番号__c;
             row.name = app.相談員__r?.氏名__c;
         }
         return row;
@@ -215,6 +295,18 @@ public with sharing class JUJ082Controller {
     }
 
     // ==================== DTO（クラス内部でのみ使用） ====================
+    // 事業の取得結果
+    public class JigyoResult {
+        public String basyoName;
+        public JigyoInfo jigyo;
+    }
+
+    public class JigyoInfo {
+        public String jigyoName;
+        public String shibuCode;
+        public String shibuName;
+    }
+
     // 検索条件
     public class SearchCondition {
         public String jujiJigyoNo;
@@ -235,10 +327,9 @@ public with sharing class JUJ082Controller {
     public class SearchRow {
         public Id applicationId;
         public Decimal uketukeNo;
-        public String jujishaType;
-        public String jujishaNo; // 登録番号 または 相談員番号
+        public String torokuNo; // 会員の場合のみ
+        public String sodaninNo; // 相談員の場合のみ
         public String name;
-        public String shibuCode;
-        public String shibuName;
+        public String createdDate; // 登録日時（yyyy/MM/dd HH:mm:ss）
     }
 }

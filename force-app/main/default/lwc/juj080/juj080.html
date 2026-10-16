@@ -344,4 +344,27 @@
             </div>
         </div>
     </div>
+
+    <!-- 従事可能日指定（JUJ081）：子コンポーネントとしてモーダル表示する -->
+    <template if:true={isKanoubiOpen}>
+        <c-juj081
+            jigyo-key={jigyoKey}
+            jujisha-no={jujishaNo}
+            kanoubi-dates={kanoubiDates}
+            onsave={handleKanoubiSave}
+            onclose={handleKanoubiClose}
+        ></c-juj081>
+    </template>
+
+    <!-- 応募情報検索（JUJ082）：子コンポーネントとしてモーダル表示する -->
+    <template if:true={isApplicationSearchOpen}>
+        <c-juj082
+            jigyo-key={jigyoKey}
+            jigyo={jigyo}
+            basyo-name={basyoName}
+            key-readonly={isJigyoKeyReadonly}
+            onselect={handleApplicationSearchSelect}
+            onclose={handleApplicationSearchClose}
+        ></c-juj082>
+    </template>
 </template>

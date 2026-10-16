@@ -28,10 +28,10 @@ private class JUJ080ControllerTest {
             支部__c = shibu.Id
         );
         // 会員の支部・事務所情報は参照先の事務所・法人（Account）から取得する
+        // ※ 支部名は事務所・法人の名称（Name）
         Account office = new Account(
-            Name = 'テスト事務所',
+            Name = 'テスト支部',
             支部コード__c = '001',
-            支部名__c = 'テスト支部',
             事務所住所__c = '東京都千代田区1-1-1',
             事務所電話番号__c = '03-0000-0000',
             事務所FAX番号__c = '03-0000-0001'
@@ -96,8 +96,22 @@ private class JUJ080ControllerTest {
         req.jigyoKey = key();
         req.jujishaNo = jujishaNo;
         req.form = form();
-        req.kanoubiDates = new List<String>{ '2026-11-01', '2026-11-08' };
+        req.kanoubiDates = new List<JUJ080Controller.KanoubiDate>{
+            kanoubi('2026-11-01', '13:00', '15:00'),
+            kanoubi('2026-11-08', '09:00', '12:00')
+        };
         return req;
+    }
+
+    // 従事可能日（時間帯1件）
+    private static JUJ080Controller.KanoubiDate kanoubi(String kanoubiDate, String startTime, String endTime) {
+        JUJ080Controller.TimeSlot slot = new JUJ080Controller.TimeSlot();
+        slot.startTime = startTime;
+        slot.endTime = endTime;
+        JUJ080Controller.KanoubiDate k = new JUJ080Controller.KanoubiDate();
+        k.kanoubiDate = kanoubiDate;
+        k.timeSlots = new List<JUJ080Controller.TimeSlot>{ slot };
+        return k;
     }
 
     // 画面と同じく JSON 文字列で登録処理を呼び出す
@@ -118,8 +132,21 @@ private class JUJ080ControllerTest {
         Id jigyoId = jigyo().Id;
         従事事業応募__c app = new 従事事業応募__c(従事事業__c = jigyoId, 会員__c = member().Id, 受付番号__c = uketukeNo);
         insert app;
-        insert new 従事事業応募明細__c(従事事業応募__c = app.Id, 従事事業__c = jigyoId, 従事可能日__c = Date.newInstance(2026, 11, 1));
+        insert new 従事事業応募明細__c(
+            従事事業応募__c = app.Id,
+            従事事業__c = jigyoId,
+            従事可能日__c = Date.newInstance(2026, 11, 1),
+            時間帯__c = '[{"startTime":"13:00","endTime":"15:00","unused":"x"}]' // 使用しない項目は無視される
+        );
         return [SELECT Id, LastModifiedDate, 受付番号__c FROM 従事事業応募__c WHERE Id = :app.Id];
+    }
+
+    // ==================== parseTimeSlots ====================
+    @IsTest
+    static void parseTimeSlots_未設定・形式不正は空() {
+        Assert.areEqual(0, JUJ080Controller.parseTimeSlots(null).size());
+        Assert.areEqual(0, JUJ080Controller.parseTimeSlots('not json').size());
+        Assert.areEqual(1, JUJ080Controller.parseTimeSlots('[{"startTime":"13:00","endTime":"15:00"}]').size());
     }
 
     // ==================== joinName ====================
@@ -202,7 +229,13 @@ private class JUJ080ControllerTest {
         従事事業応募__c app = createMemberApplication(1);
         Map<String, Object> r = JUJ080Controller.showApplication(JIGYO_NO, BASYO_NO, NENDO, MEMBER_NO);
         Assert.areEqual(String.valueOf(app.Id), get(r, 'application.applicationId'));
-        Assert.areEqual(new List<Object>{ '2026-11-01' }, (List<Object>) get(r, 'application.kanoubiDates'));
+        List<Object> kanoubiDates = (List<Object>) get(r, 'application.kanoubiDates');
+        Assert.areEqual(1, kanoubiDates.size());
+        Map<String, Object> k = (Map<String, Object>) kanoubiDates[0];
+        Assert.areEqual('2026-11-01', k.get('kanoubiDate'));
+        Map<String, Object> slot = (Map<String, Object>) ((List<Object>) k.get('timeSlots'))[0];
+        Assert.areEqual('13:00', slot.get('startTime'));
+        Assert.areEqual('15:00', slot.get('endTime'));
     }
 
     @IsTest
@@ -326,14 +359,15 @@ private class JUJ080ControllerTest {
         JUJ080Controller.SaveRequest req = addRequest(MEMBER_NO);
         req.applicationId = app.Id;
         req.lastModifiedDate = app.LastModifiedDate;
-        req.kanoubiDates = new List<String>{ '2026-11-15' };
+        req.kanoubiDates = new List<JUJ080Controller.KanoubiDate>{ kanoubi('2026-11-15', '10:00', '11:00') };
 
         Map<String, Object> r = save(req);
         Assert.areEqual(1, num(r, 'uketukeNo'));
 
-        List<従事事業応募明細__c> details = [SELECT 従事可能日__c FROM 従事事業応募明細__c WHERE 従事事業応募__c = :app.Id];
+        List<従事事業応募明細__c> details = [SELECT 従事可能日__c, 時間帯__c FROM 従事事業応募明細__c WHERE 従事事業応募__c = :app.Id];
         Assert.areEqual(1, details.size(), '明細が置き換えられること');
         Assert.areEqual(Date.newInstance(2026, 11, 15), details[0].従事可能日__c);
+        Assert.areEqual('[{"startTime":"10:00","endTime":"11:00"}]', details[0].時間帯__c);
     }
 
     @IsTest
@@ -409,6 +443,25 @@ private class JUJ080ControllerTest {
     }
 
     @IsTest
+    static void deleteApplication_割当ありはエラー() {
+        createMemberApplication(1);
+        // 仮割当（割当フラグ＝1）
+        insert new 従事事業割当__c(
+            従事事業__c = jigyo().Id,
+            会員__c = member().Id,
+            従事日__c = Date.newInstance(2026, 11, 1),
+            割当フラグ__c = JUJ080Controller.FLAG_ON
+        );
+        try {
+            JUJ080Controller.deleteApplication(JIGYO_NO, BASYO_NO, NENDO, MEMBER_NO);
+            Assert.fail('例外が発生すること');
+        } catch (AuraHandledException e) {
+            Assert.areEqual(JUJ080Controller.E_ASSIGNED[1], e.getMessage());
+        }
+        Assert.areEqual(1, [SELECT COUNT() FROM 従事事業応募__c], '削除されないこと');
+    }
+
+    @IsTest
     static void deleteApplication_応募なしはエラー() {
         try {
             JUJ080Controller.deleteApplication(JIGYO_NO, BASYO_NO, NENDO, MEMBER_NO);
@@ -445,6 +498,26 @@ private class JUJ080ControllerTest {
         save(addRequest(SODANIN_NO));
         JUJ080Controller.deleteAllApplications(JIGYO_NO, BASYO_NO, NENDO);
         Assert.areEqual(0, [SELECT COUNT() FROM 従事事業応募__c]);
+    }
+
+    @IsTest
+    static void deleteAllApplications_割当ありは1件も削除しない() {
+        createMemberApplication(1);
+        save(addRequest(SODANIN_NO));
+        // 相談員に確定した割当（確定フラグ＝1）
+        insert new 従事事業割当__c(
+            従事事業__c = jigyo().Id,
+            相談員__c = [SELECT Id FROM 相談員__c LIMIT 1].Id,
+            従事日__c = Date.newInstance(2026, 11, 8),
+            確定フラグ__c = JUJ080Controller.FLAG_ON
+        );
+        try {
+            JUJ080Controller.deleteAllApplications(JIGYO_NO, BASYO_NO, NENDO);
+            Assert.fail('例外が発生すること');
+        } catch (AuraHandledException e) {
+            Assert.areEqual(JUJ080Controller.E_ASSIGNED[1], e.getMessage());
+        }
+        Assert.areEqual(2, [SELECT COUNT() FROM 従事事業応募__c], '1件も削除されないこと');
     }
 
     @IsTest

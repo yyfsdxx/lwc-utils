@@ -5,7 +5,7 @@
  * ※ オブジェクト名・項目名は論理名で記載している（API 名確定後に一括置換する）。
  * ※ 従事事業応募は従事事業の主従子オブジェクトのため、参照範囲は従事事業に従う。
  *   SOQL・DML はすべてユーザモードで実行し、支部の条件は付けない。
- * ※ 他担当の設計に依存する部分（事業の入力フラグ・一括割当実行中・割当）は「Gateway」区画のスタブで実装している。
+ * ※ 他担当の設計に依存する部分（事業の入力フラグ・一括割当実行中）は「Gateway」区画のスタブで実装している。
  * ※ 業務エラーは JujiOboException で発生させ、各メソッドの入口で AuraHandledException に変換する。
  *   例外を画面へ返した時点でトランザクションはロールバックされる。
  * ※ LWC から呼び出すメソッドは、内部クラスを引数・戻り値に使用できないため、以下のとおりとする。
@@ -76,6 +76,10 @@ public with sharing class JUJ080Controller {
     private static final List<String> E_ASSIGNED = new List<String>{ 'WLP007-0006', '割当済みのため削除できません。' };
     @TestVisible
     private static final List<String> E_NO_APPLICATIONS = new List<String>{ 'JUJ080-E006', '削除対象の応募が存在しません。' };
+
+    // 割当のフラグ項目（割当フラグ・確定フラグ）は選択リスト。値 '1' で ON（仮割当・確定）
+    @TestVisible
+    private static final String FLAG_ON = '1';
 
     // ==================== 2.(1) 事業の取得 ====================
     // 戻り値：{ basyoName, jigyo: { jigyoName, shibuCode, shibuName, lastUketukeNo, inputControl } | null }
@@ -240,19 +244,20 @@ public with sharing class JUJ080Controller {
                 Database.update(rec, AccessLevel.USER_MODE);
             }
 
-            // ⑥ 従事可能日（従事事業応募明細）を登録する
+            // ⑥ 従事可能日（従事事業応募明細）を登録する。日付ごとに1件とし、選択した時間帯を JSON で設定する
             // b. 変更モード：既存の明細をすべて削除してから追加する
             if (!isAdd && !existing.従事事業応募明細__r.isEmpty()) {
                 Database.delete(existing.従事事業応募明細__r, AccessLevel.USER_MODE);
             }
             List<従事事業応募明細__c> details = new List<従事事業応募明細__c>();
             if (request.kanoubiDates != null) {
-                for (String kanoubi : request.kanoubiDates) {
+                for (KanoubiDate kanoubi : request.kanoubiDates) {
                     details.add(
                         new 従事事業応募明細__c(
                             従事事業応募__c = rec.Id,
                             従事事業__c = jigyo.Id,
-                            従事可能日__c = Date.valueOf(kanoubi)
+                            従事可能日__c = Date.valueOf(kanoubi.kanoubiDate),
+                            時間帯__c = JSON.serialize(kanoubi.timeSlots == null ? new List<TimeSlot>() : kanoubi.timeSlots)
                         )
                     );
                 }
@@ -294,7 +299,7 @@ public with sharing class JUJ080Controller {
                 throw error(E_APPLICATION_NOT_FOUND);
             }
             // ⑤ 割当（仮割当を含む）が存在する場合はエラー
-            if (hasAssignment(new Set<Id>{ app.Id })) {
+            if (hasAssignment(jigyo.Id, new List<従事事業応募__c>{ app })) {
                 throw error(E_ASSIGNED);
             }
             // ⑥ 削除する（明細は主従関係により同時に削除される）
@@ -319,7 +324,7 @@ public with sharing class JUJ080Controller {
             }
             // ③ 従事事業応募を取得する。1件もない場合はエラー
             List<従事事業応募__c> apps = [
-                SELECT Id
+                SELECT Id, 会員__c, 相談員__c
                 FROM 従事事業応募__c
                 WHERE 従事事業__c = :jigyo.Id
                 WITH USER_MODE
@@ -328,7 +333,7 @@ public with sharing class JUJ080Controller {
                 throw error(E_NO_APPLICATIONS);
             }
             // ④ 1件でも割当が存在する場合はエラーとし、1件も削除しない
-            if (hasAssignment(new Map<Id, 従事事業応募__c>(apps).keySet())) {
+            if (hasAssignment(jigyo.Id, apps)) {
                 throw error(E_ASSIGNED);
             }
             // ⑤ すべて削除する（明細は主従関係により同時に削除される）
@@ -396,7 +401,7 @@ public with sharing class JUJ080Controller {
         //    支部コード・支部名・事務所住所・事務所電話番号・事務所FAX番号は参照先の事務所・法人（Account）から取得する
         List<Contact> members = [
             SELECT Id, 登録番号__c, Name, フリガナ_姓__c, フリガナ_名__c,
-                事務所__r.支部コード__c, 事務所__r.支部名__c,
+                事務所__r.支部コード__c, 事務所__r.Name,
                 事務所__r.事務所住所__c, 事務所__r.事務所電話番号__c, 事務所__r.事務所FAX番号__c
             FROM Contact
             WHERE 登録番号__c = :jujishaNo
@@ -412,7 +417,7 @@ public with sharing class JUJ080Controller {
             info.name = m.Name;
             info.furigana = joinName(m.フリガナ_姓__c, m.フリガナ_名__c);
             info.shibuCode = m.事務所__r?.支部コード__c;
-            info.shibuName = m.事務所__r?.支部名__c;
+            info.shibuName = m.事務所__r?.Name; // 支部名＝事務所・法人の名称
             info.address = m.事務所__r?.事務所住所__c;
             info.tel = m.事務所__r?.事務所電話番号__c;
             info.fax = m.事務所__r?.事務所FAX番号__c;
@@ -498,7 +503,7 @@ public with sharing class JUJ080Controller {
         fields.addAll(WEEKDAY_FIELDS.values());
         fields.addAll(SKILL_FIELDS);
         return 'SELECT ' + String.join(fields, ', ') +
-            ', (SELECT Id, 従事可能日__c FROM 従事事業応募明細__r ORDER BY 従事可能日__c)' +
+            ', (SELECT Id, 従事可能日__c, 時間帯__c FROM 従事事業応募明細__r ORDER BY 従事可能日__c)' +
             ' FROM 従事事業応募__c' +
             ' WHERE ' + whereClause +
             ' LIMIT 1';
@@ -534,6 +539,19 @@ public with sharing class JUJ080Controller {
             return null;
         }
         return (Map<String, Object>) JSON.deserializeUntyped(JSON.serialize(dto));
+    }
+
+    // 時間帯 JSON → 時間帯リスト（未設定・形式不正の場合は空。使用しない項目は無視する）
+    @TestVisible
+    private static List<TimeSlot> parseTimeSlots(String value) {
+        if (String.isBlank(value)) {
+            return new List<TimeSlot>();
+        }
+        try {
+            return (List<TimeSlot>) JSON.deserialize(value, List<TimeSlot>.class);
+        } catch (JSONException e) {
+            return new List<TimeSlot>();
+        }
     }
 
     // 従事事業 → 画面表示用
@@ -586,9 +604,12 @@ public with sharing class JUJ080Controller {
         info.uketukeNo = app.受付番号__c;
         info.lastModifiedDate = app.LastModifiedDate; // 7.(3)③c の更新確認に使用
         info.form = form;
-        info.kanoubiDates = new List<String>();
+        info.kanoubiDates = new List<KanoubiDate>();
         for (従事事業応募明細__c detail : app.従事事業応募明細__r) {
-            info.kanoubiDates.add(String.valueOf(detail.従事可能日__c)); // 'yyyy-MM-dd'
+            KanoubiDate kanoubi = new KanoubiDate();
+            kanoubi.kanoubiDate = String.valueOf(detail.従事可能日__c); // 'yyyy-MM-dd'
+            kanoubi.timeSlots = parseTimeSlots(detail.時間帯__c);
+            info.kanoubiDates.add(kanoubi);
         }
         return info;
     }
@@ -642,7 +663,7 @@ public with sharing class JUJ080Controller {
         return ctrl;
     }
 
-    // 【要確認 QA-16】実施日（従事事業明細）が1件以上あるか
+    // 実施日（従事事業明細）が1件以上あるか
     private static Boolean hasJisshibi(Id jigyoId) {
         return [SELECT COUNT() FROM 従事事業明細__c WHERE 従事事業__c = :jigyoId WITH USER_MODE] > 0;
     }
@@ -652,9 +673,31 @@ public with sharing class JUJ080Controller {
         return false;
     }
 
-    // 【要確認 QA-11・QA-14】応募に割当（仮割当を含む）が存在するか。割当オブジェクト確定までは常に false
-    private static Boolean hasAssignment(Set<Id> applicationIds) {
-        return false;
+    // 応募の従事者に、同じ事業の割当（仮割当を含む）が存在するか（8.(2)⑤・9.(3)④）
+    // ※ 割当は従事事業の主従子オブジェクトで、会員・相談員を参照する（応募への参照はない）
+    //   仮割当＝割当フラグ＝1、確定＝確定フラグ＝1
+    private static Boolean hasAssignment(Id jigyoId, List<従事事業応募__c> apps) {
+        Set<Id> memberIds = new Set<Id>();
+        Set<Id> sodaninIds = new Set<Id>();
+        for (従事事業応募__c app : apps) {
+            if (app.会員__c != null) {
+                memberIds.add(app.会員__c);
+            }
+            if (app.相談員__c != null) {
+                sodaninIds.add(app.相談員__c);
+            }
+        }
+        if (memberIds.isEmpty() && sodaninIds.isEmpty()) {
+            return false;
+        }
+        return [
+            SELECT COUNT()
+            FROM 従事事業割当__c
+            WHERE 従事事業__c = :jigyoId
+            AND (割当フラグ__c = :FLAG_ON OR 確定フラグ__c = :FLAG_ON)
+            AND (会員__c IN :memberIds OR 相談員__c IN :sodaninIds)
+            WITH USER_MODE
+        ] > 0;
     }
 
     // ==================== 例外 ====================
@@ -747,7 +790,19 @@ public with sharing class JUJ080Controller {
         public Decimal uketukeNo;
         public Datetime lastModifiedDate;
         public ApplicationForm form;
-        public List<String> kanoubiDates;
+        public List<KanoubiDate> kanoubiDates;
+    }
+
+    // 従事可能日（日付と選択した時間帯）
+    public class KanoubiDate {
+        public String kanoubiDate; // 'yyyy-MM-dd'
+        public List<TimeSlot> timeSlots;
+    }
+
+    // 時間帯（応募明細の時間帯項目に JSON で保持する。開始時間＋終了時間で同一判定する）
+    public class TimeSlot {
+        public String startTime; // 'HH:mm'
+        public String endTime; // 'HH:mm'
     }
 
     // 応募情報部
@@ -780,7 +835,7 @@ public with sharing class JUJ080Controller {
         public Id applicationId;
         public Datetime lastModifiedDate;
         public ApplicationForm form;
-        public List<String> kanoubiDates;
+        public List<KanoubiDate> kanoubiDates;
     }
 
     public class SaveResult {

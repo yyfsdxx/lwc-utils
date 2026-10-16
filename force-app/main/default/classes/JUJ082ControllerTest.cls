@@ -12,10 +12,10 @@ private class JUJ082ControllerTest {
 
     @TestSetup
     static void setup() {
-        Account shibu = new Account(Name = 'テスト支部', 支部コード__c = '001');
-        Account office1 = new Account(Name = '事務所1', 支部コード__c = '001', 支部名__c = '東支部');
-        Account office2 = new Account(Name = '事務所2', 支部コード__c = '002', 支部名__c = '西支部');
-        insert new List<Account>{ shibu, office1, office2 };
+        // 事務所・法人（支部）。支部名＝Name、1つの支部コードに対応する支部は1件
+        Account shibu1 = new Account(Name = '東支部', 支部コード__c = '001');
+        Account shibu2 = new Account(Name = '西支部', 支部コード__c = '002');
+        insert new List<Account>{ shibu1, shibu2 };
 
         従事場所マスタ__c basyo = new 従事場所マスタ__c(従事場所No__c = BASYO_NO, 従事場所名__c = 'テスト場所');
         insert basyo;
@@ -24,16 +24,18 @@ private class JUJ082ControllerTest {
             従事場所__c = basyo.Id,
             実施年度__c = NENDO,
             従事事業名__c = 'テスト事業',
-            支部__c = shibu.Id
+            支部__c = shibu1.Id
         );
         insert jigyo;
 
         // 会員は取引先責任者（Contact）
-        Contact m1 = new Contact(登録番号__c = '1000001', LastName = '山田 太郎', 事務所__c = office1.Id);
-        Contact m2 = new Contact(登録番号__c = '1000002', LastName = '佐藤 花子', 事務所__c = office2.Id);
+        Contact m1 = new Contact(登録番号__c = '1000001', LastName = '山田 太郎', 事務所__c = shibu1.Id);
+        Contact m2 = new Contact(登録番号__c = '1000002', LastName = '佐藤 花子', 事務所__c = shibu2.Id);
         insert new List<Contact>{ m1, m2 };
         相談員__c s1 = new 相談員__c(相談員番号__c = '9000001', 氏名__c = '山田 一郎');
         insert s1;
+        // 【要確認】汎用マスタの対象年度
+        insert new Hanyou_Master__c(対象年度__c = '2026');
 
         insert new List<従事事業応募__c>{
             new 従事事業応募__c(従事事業__c = jigyo.Id, 会員__c = m1.Id, 受付番号__c = 2),
@@ -56,10 +58,12 @@ private class JUJ082ControllerTest {
         return JUJ082Controller.search(JSON.serialize(c));
     }
 
+    // 各行の登録番号（相談員の場合は相談員番号）
     private static List<String> jujishaNos(List<Map<String, Object>> rows) {
         List<String> nos = new List<String>();
         for (Map<String, Object> row : rows) {
-            nos.add((String) row.get('jujishaNo'));
+            String torokuNo = (String) row.get('torokuNo');
+            nos.add(torokuNo != null ? torokuNo : (String) row.get('sodaninNo'));
         }
         return nos;
     }
@@ -69,10 +73,12 @@ private class JUJ082ControllerTest {
     static void search_条件なしは会員と相談員の両方を受付番号順() {
         List<Map<String, Object>> rows = search(cond());
         Assert.areEqual(new List<String>{ '1000002', '1000001', '9000001' }, jujishaNos(rows));
-        Assert.areEqual('西支部', rows[0].get('shibuName'));
-        Assert.areEqual('SODANIN', rows[2].get('jujishaType'));
-        Assert.isNull(rows[2].get('shibuName'), '相談員の支部は空白');
+        Assert.areEqual('佐藤 花子', rows[0].get('name'));
+        Assert.isNull(rows[0].get('sodaninNo'), '会員の場合、相談員番号は空白');
+        Assert.isNull(rows[2].get('torokuNo'), '相談員の場合、登録番号は空白');
+        Assert.areEqual('山田 一郎', rows[2].get('name'));
         Assert.isNotNull(rows[0].get('applicationId'));
+        Assert.isNotNull(rows[0].get('createdDate'));
     }
 
     @IsTest
@@ -124,6 +130,45 @@ private class JUJ082ControllerTest {
     @IsTest
     static void escapeLike_特殊文字() {
         Assert.areEqual('a\\%b\\_c\\\\d', JUJ082Controller.escapeLike('a%b_c\\d'));
+    }
+
+    // ==================== 実施年度の初期値・事業の取得・名称の取得 ====================
+    @IsTest
+    static void getDefaultNendo_汎用マスタの対象年度() {
+        Assert.areEqual('2026', JUJ082Controller.getDefaultNendo());
+    }
+
+    @IsTest
+    static void getJigyo_事業と場所名を取得() {
+        Map<String, Object> r = JUJ082Controller.getJigyo(JIGYO_NO, BASYO_NO, NENDO);
+        Assert.areEqual('テスト場所', r.get('basyoName'));
+        Map<String, Object> jigyo = (Map<String, Object>) r.get('jigyo');
+        Assert.areEqual('テスト事業', jigyo.get('jigyoName'));
+        Assert.areEqual('001', jigyo.get('shibuCode'));
+        Assert.areEqual('東支部', jigyo.get('shibuName'));
+    }
+
+    @IsTest
+    static void getJigyo_キー不足は場所名のみ() {
+        Map<String, Object> r = JUJ082Controller.getJigyo(null, BASYO_NO, NENDO);
+        Assert.areEqual('テスト場所', r.get('basyoName'));
+        Assert.isNull(r.get('jigyo'));
+    }
+
+    @IsTest
+    static void getName_各種名称() {
+        Assert.areEqual('山田 太郎', JUJ082Controller.getName(JUJ082Controller.NAME_TOROKU, '1000001'));
+        Assert.areEqual('西支部', JUJ082Controller.getName(JUJ082Controller.NAME_SHIBU, '002'));
+        Assert.areEqual('山田 一郎', JUJ082Controller.getName(JUJ082Controller.NAME_SODANIN, '9000001'));
+    }
+
+    @IsTest
+    static void getName_未入力・該当なしはnull() {
+        Assert.isNull(JUJ082Controller.getName(JUJ082Controller.NAME_TOROKU, ''));
+        Assert.isNull(JUJ082Controller.getName(JUJ082Controller.NAME_TOROKU, '9999999'));
+        Assert.isNull(JUJ082Controller.getName(JUJ082Controller.NAME_SHIBU, '999'));
+        Assert.isNull(JUJ082Controller.getName(JUJ082Controller.NAME_SODANIN, '9999999'));
+        Assert.isNull(JUJ082Controller.getName('UNKNOWN', '1000001'));
     }
 
     // ==================== 0件・エラー ====================
