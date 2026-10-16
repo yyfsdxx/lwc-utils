@@ -19,10 +19,6 @@ public with sharing class JUJ082Controller {
     @TestVisible
     private static final String NAME_SODANIN = 'SODANIN'; // 相談員番号 → 相談員氏名
 
-    // 【要確認】会員の氏名（検索用）：「氏名(姓) + 半角スペース + 氏名(名)」の項目（数式項目を想定）
-    @TestVisible
-    private static final String MEMBER_NAME_FIELD = '会員__r.氏名_検索用__c';
-
     // 登録日時の表示形式（ユーザのタイムゾーンで表示）
     private static final String DATETIME_FORMAT = 'yyyy/MM/dd HH:mm:ss';
 
@@ -202,7 +198,8 @@ public with sharing class JUJ082Controller {
         addRange(memberConds, binds, '会員__r.登録番号__c', 'torokuNo', cond.torokuNoFrom, cond.torokuNoTo);
         addRange(memberConds, binds, '会員__r.事務所__r.支部コード__c', 'shibuCode', cond.shibuCodeFrom, cond.shibuCodeTo);
         if (namePattern != null) {
-            memberConds.add(MEMBER_NAME_FIELD + ' LIKE :namePattern');
+            // 会員（取引先責任者）の氏名は Name に格納されている
+            memberConds.add('会員__r.Name LIKE :namePattern');
         }
 
         // ⑤ 相談員抽出条件

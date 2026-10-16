@@ -128,6 +128,20 @@ private class JUJ082ControllerTest {
     }
 
     @IsTest
+    static void search_氏名部分一致は会員側() {
+        JUJ082Controller.SearchCondition c = cond();
+        c.name = '太郎';
+        Assert.areEqual(new List<String>{ '1000001' }, jujishaNos(search(c)));
+    }
+
+    @IsTest
+    static void search_氏名部分一致は会員・相談員の両方() {
+        JUJ082Controller.SearchCondition c = cond();
+        c.name = '山田';
+        Assert.areEqual(new List<String>{ '1000001', '9000001' }, jujishaNos(search(c)));
+    }
+
+    @IsTest
     static void escapeLike_特殊文字() {
         Assert.areEqual('a\\%b\\_c\\\\d', JUJ082Controller.escapeLike('a%b_c\\d'));
     }
